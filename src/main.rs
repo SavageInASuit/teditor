@@ -14,6 +14,8 @@ struct EditorConfig {
     orig_termios: Termios,
     screen_rows: u8,
     screen_cols: u8,
+    cursor_x: u8,
+    cursor_y: u8,
 }
 
 struct ScreenBuffer {
@@ -157,6 +159,32 @@ fn set_cursor_position(sb: Option<&mut ScreenBuffer>, row: u8, col: u8) {
     }
 }
 
+fn move_cursor(editor: &mut EditorConfig, key: u8) {
+    match key as char {
+        'h' => {
+            if editor.cursor_x > 0 {
+                editor.cursor_x -= 1;
+            }
+        }
+        'l' => {
+            if editor.cursor_x < editor.screen_cols - 1 {
+                editor.cursor_x += 1;
+            }
+        }
+        'k' => {
+            if editor.cursor_y > 0 {
+                editor.cursor_y -= 1;
+            }
+        }
+        'j' => {
+            if editor.cursor_y < editor.screen_rows - 1 {
+                editor.cursor_y += 1;
+            }
+        }
+        _ => (),
+    }
+}
+
 fn clear_and_reset_cursor(sb: Option<&mut ScreenBuffer>) {
     if let Some(buf) = sb {
         buf.append(CLEAR_SCREEN);
@@ -206,7 +234,7 @@ fn editor_refresh_screen(editor: &EditorConfig, sb: &mut ScreenBuffer) {
     toggle_cursor(sb, false);
     set_cursor_position(Some(sb), 1, 1);
     editor_draw_rows(sb, editor.screen_cols, editor.screen_rows);
-    set_cursor_position(Some(sb), 1, 1);
+    set_cursor_position(Some(sb), editor.cursor_y + 1, editor.cursor_x + 1);
     toggle_cursor(sb, true);
 
     // flush stdout
@@ -225,13 +253,17 @@ fn read_input() -> u8 {
     buf[0]
 }
 
-fn process_keypress(termios: &Termios) {
+fn process_keypress(editor: &mut EditorConfig) {
     let c = read_input();
 
     if is_cntrl(c) && c == ctrl_key('q') {
         clear_and_reset_cursor(None);
-        disable_raw_mode(termios);
+        disable_raw_mode(&editor.orig_termios);
         std::process::exit(0);
+    }
+
+    if ['h', 'j', 'k', 'l'].contains(&(c as char)) {
+        move_cursor(editor, c);
     }
 }
 
@@ -241,6 +273,8 @@ fn init_editor(orig_termios: Termios) -> EditorConfig {
         orig_termios,
         screen_rows,
         screen_cols,
+        cursor_x: 0,
+        cursor_y: 0,
     }
 }
 
@@ -251,7 +285,7 @@ fn main() {
 
     loop {
         editor_refresh_screen(&editor, &mut sb);
-        process_keypress(&editor.orig_termios);
+        process_keypress(&mut editor);
         sb.flush();
     }
 }
