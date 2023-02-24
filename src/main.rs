@@ -18,6 +18,25 @@ struct EditorConfig {
     cursor_y: u8,
 }
 
+enum EditorKey {
+    Left = 'h' as isize,
+    Right = 'l' as isize,
+    Up = 'k' as isize,
+    Down = 'j' as isize,
+}
+
+impl From<u8> for EditorKey {
+    fn from(key: u8) -> Self {
+        match key {
+            b'h' | b'D' => EditorKey::Left,
+            b'l' | b'C' => EditorKey::Right,
+            b'k' | b'A' => EditorKey::Up,
+            b'j' | b'B' => EditorKey::Down,
+            _ => panic!("Unknown key"),
+        }
+    }
+}
+
 struct ScreenBuffer {
     to_print: String,
 }
@@ -159,29 +178,28 @@ fn set_cursor_position(sb: Option<&mut ScreenBuffer>, row: u8, col: u8) {
     }
 }
 
-fn move_cursor(editor: &mut EditorConfig, key: u8) {
-    match key as char {
-        'h' => {
+fn move_cursor(editor: &mut EditorConfig, key: EditorKey) {
+    match key {
+        EditorKey::Left => {
             if editor.cursor_x > 0 {
                 editor.cursor_x -= 1;
             }
         }
-        'l' => {
+        EditorKey::Right => {
             if editor.cursor_x < editor.screen_cols - 1 {
                 editor.cursor_x += 1;
             }
         }
-        'k' => {
+        EditorKey::Up => {
             if editor.cursor_y > 0 {
                 editor.cursor_y -= 1;
             }
         }
-        'j' => {
+        EditorKey::Down => {
             if editor.cursor_y < editor.screen_rows - 1 {
                 editor.cursor_y += 1;
             }
         }
-        _ => (),
     }
 }
 
@@ -253,6 +271,7 @@ fn read_input() -> u8 {
     buf[0]
 }
 
+// May want to return the character in the future
 fn process_keypress(editor: &mut EditorConfig) {
     let c = read_input();
 
@@ -262,9 +281,19 @@ fn process_keypress(editor: &mut EditorConfig) {
         std::process::exit(0);
     }
 
-    if ['h', 'j', 'k', 'l'].contains(&(c as char)) {
-        move_cursor(editor, c);
+    // Movement with arrow keys or hjkl
+    if c == 27 {
+        // escape sequence
+        let c1 = read_input();
+        let c2 = read_input();
+        if c1 == b'[' {
+            // arrow keys
+            move_cursor(editor, EditorKey::from(c2));
+        }
+    } else if ['h', 'j', 'k', 'l'].contains(&(c as char)) {
+        move_cursor(editor, EditorKey::from(c));
     }
+    // TODO: create a logging method that puts output at the bottom of the screen
 }
 
 fn init_editor(orig_termios: Termios) -> EditorConfig {
