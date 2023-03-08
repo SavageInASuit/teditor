@@ -18,21 +18,35 @@ struct EditorConfig {
     cursor_y: u8,
 }
 
+#[repr(u32)]
 enum EditorKey {
-    Left = 'h' as isize,
-    Right = 'l' as isize,
-    Up = 'k' as isize,
-    Down = 'j' as isize,
+    Left = 1000,
+    Right = 1001,
+    Up = 1002,
+    Down = 1003,
 }
 
-impl From<u8> for EditorKey {
-    fn from(key: u8) -> Self {
-        match key {
-            b'h' | b'D' => EditorKey::Left,
-            b'l' | b'C' => EditorKey::Right,
-            b'k' | b'A' => EditorKey::Up,
-            b'j' | b'B' => EditorKey::Down,
-            _ => panic!("Unknown key"),
+impl TryFrom<u32> for EditorKey {
+    type Error = String;
+
+    fn try_from(key: u32) -> Result<Self, Self::Error> {
+        if ((key as u8) as u32) == key {
+            // In ascii range
+            match key as u8 {
+                b'h' | b'D' => Ok(EditorKey::Left),
+                b'l' | b'C' => Ok(EditorKey::Right),
+                b'k' | b'A' => Ok(EditorKey::Up),
+                b'j' | b'B' => Ok(EditorKey::Down),
+                _ => Err(format!("Unknown key: {}", key)),
+            }
+        } else {
+            match key {
+                x if x == EditorKey::Left as u32 => Ok(EditorKey::Left),
+                x if x == EditorKey::Right as u32 => Ok(EditorKey::Right),
+                x if x == EditorKey::Up as u32 => Ok(EditorKey::Up),
+                x if x == EditorKey::Down as u32 => Ok(EditorKey::Down),
+                _ => Err(format!("Unknown key: {}", key)),
+            }
         }
     }
 }
@@ -94,11 +108,11 @@ fn setup_terminal() -> Termios {
     orig_termios
 }
 
-fn ctrl_key(key: char) -> u8 {
-    key as u8 & 0x1f
+fn ctrl_key(key: char) -> u32 {
+    key as u32 & 0x1f
 }
 
-fn is_cntrl(key: u8) -> bool {
+fn is_cntrl(key: u32) -> bool {
     key < 32
 }
 
@@ -271,9 +285,29 @@ fn read_input() -> u8 {
     buf[0]
 }
 
+fn read_key() -> u32 {
+    let c = read_input();
+    if c == 27 {
+        // escape sequence
+        let c1 = read_input();
+        let c2 = read_input();
+        if c1 == b'[' {
+            // arrow keys
+            match c2 {
+                b'A' => return EditorKey::Up as u32,
+                b'B' => return EditorKey::Down as u32,
+                b'C' => return EditorKey::Right as u32,
+                b'D' => return EditorKey::Left as u32,
+                _ => (),
+            }
+        }
+    }
+    c as u32
+}
+
 // May want to return the character in the future
 fn process_keypress(editor: &mut EditorConfig) {
-    let c = read_input();
+    let c = read_key();
 
     if is_cntrl(c) && c == ctrl_key('q') {
         clear_and_reset_cursor(None);
@@ -281,18 +315,14 @@ fn process_keypress(editor: &mut EditorConfig) {
         std::process::exit(0);
     }
 
-    // Movement with arrow keys or hjkl
-    if c == 27 {
-        // escape sequence
-        let c1 = read_input();
-        let c2 = read_input();
-        if c1 == b'[' {
-            // arrow keys
-            move_cursor(editor, EditorKey::from(c2));
-        }
-    } else if ['h', 'j', 'k', 'l'].contains(&(c as char)) {
-        move_cursor(editor, EditorKey::from(c));
+    if c == 0 {
+        return;
     }
+
+    if let Ok(key) = EditorKey::try_from(c) {
+        move_cursor(editor, key);
+    }
+
     // TODO: create a logging method that puts output at the bottom of the screen
 }
 
