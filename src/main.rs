@@ -24,6 +24,11 @@ enum EditorKey {
     Right = 1001,
     Up = 1002,
     Down = 1003,
+    PageUp = 1004,
+    PageDown = 1005,
+    Home = 1006,
+    End = 1007,
+    Delete = 1008,
 }
 
 impl TryFrom<u32> for EditorKey {
@@ -129,7 +134,7 @@ fn die(e: &str, err: &Option<Box<dyn Error>>) {
 
 // todo refactor this
 fn get_cursor_position() -> (u8, u8) {
-    print!("\x1b[6n\n");
+    println!("\x1b[6n");
     let mut buf: [u8; 16] = [0; 16];
     match io::stdin().read(&mut buf) {
         Ok(_) => (),
@@ -214,6 +219,19 @@ fn move_cursor(editor: &mut EditorConfig, key: EditorKey) {
                 editor.cursor_y += 1;
             }
         }
+        EditorKey::PageUp => {
+            editor.cursor_y = 0;
+        }
+        EditorKey::PageDown => {
+            editor.cursor_y = editor.screen_rows - 1;
+        }
+        EditorKey::Home => {
+            editor.cursor_x = 0;
+        }
+        EditorKey::End => {
+            editor.cursor_x = editor.screen_cols - 1;
+        }
+        _ => (),
     }
 }
 
@@ -292,12 +310,37 @@ fn read_key() -> u32 {
         let c1 = read_input();
         let c2 = read_input();
         if c1 == b'[' {
-            // arrow keys
+            if c2 > b'0' && c2 <= b'9' {
+                let c3 = read_input();
+                if c3 == b'~' {
+                    // function key
+                    match c2 {
+                        b'1' => return EditorKey::Home as u32,
+                        b'3' => return EditorKey::Delete as u32,
+                        b'4' => return EditorKey::End as u32,
+                        b'5' => return EditorKey::PageUp as u32,
+                        b'6' => return EditorKey::PageDown as u32,
+                        b'7' => return EditorKey::Home as u32,
+                        b'8' => return EditorKey::End as u32,
+                        _ => (),
+                    }
+                }
+            } else {
+                // arrow keys
+                match c2 {
+                    b'A' => return EditorKey::Up as u32,
+                    b'B' => return EditorKey::Down as u32,
+                    b'C' => return EditorKey::Right as u32,
+                    b'D' => return EditorKey::Left as u32,
+                    b'H' => return EditorKey::Home as u32,
+                    b'F' => return EditorKey::End as u32,
+                    _ => (),
+                }
+            }
+        } else if c1 == b'O' {
             match c2 {
-                b'A' => return EditorKey::Up as u32,
-                b'B' => return EditorKey::Down as u32,
-                b'C' => return EditorKey::Right as u32,
-                b'D' => return EditorKey::Left as u32,
+                b'H' => return EditorKey::Home as u32,
+                b'F' => return EditorKey::End as u32,
                 _ => (),
             }
         }
@@ -338,7 +381,7 @@ fn init_editor(orig_termios: Termios) -> EditorConfig {
 }
 
 fn main() {
-    let mut orig_termios = setup_terminal();
+    let orig_termios = setup_terminal();
     let mut editor = init_editor(orig_termios);
     let mut sb = ScreenBuffer::new();
 
