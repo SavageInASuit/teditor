@@ -14,7 +14,7 @@ const HIDE_CURSOR: &str = "\x1b[?25l";
 const SHOW_CURSOR: &str = "\x1b[?25h";
 
 struct Erow {
-    size: usize,
+    size: u16,
     chars: String,
 }
 
@@ -27,6 +27,7 @@ struct EditorConfig {
     num_rows: u16,
     rows: Vec<Erow>,
     row_offset: u16,
+    col_offset: u16,
 }
 
 #[repr(u32)]
@@ -208,7 +209,7 @@ fn editor_open(editor: &mut EditorConfig, path: &str) {
         }
     };
     for line in file_content.lines() {
-        let linelen = line.len();
+        let linelen = line.len() as u16;
         let row = Erow {
             size: linelen,
             chars: line.to_string(),
@@ -241,22 +242,16 @@ fn move_cursor(editor: &mut EditorConfig, key: EditorKey) {
             }
         }
         EditorKey::Right => {
-            if editor.cursor_x < editor.screen_cols - 1 {
-                editor.cursor_x += 1;
-            }
+            editor.cursor_x += 1;
         }
         EditorKey::Up => {
             if editor.cursor_y > 0 {
                 editor.cursor_y -= 1;
-            } else if editor.row_offset > 0 {
-                editor.row_offset -= 1;
             }
         }
         EditorKey::Down => {
-            if editor.cursor_y < editor.screen_rows - 1 {
+            if editor.cursor_y < editor.num_rows {
                 editor.cursor_y += 1;
-            } else {
-                editor.row_offset += 1;
             }
         }
         EditorKey::PageUp => {
@@ -316,8 +311,14 @@ fn editor_draw_rows(sb: &mut ScreenBuffer, editor: &EditorConfig) {
                 sb.append("~");
             }
         } else {
-            // Render the contents of this row, instead of the tilde
-            sb.append(&editor.rows[file_row as usize].chars);
+            let len = editor.rows[file_row as usize]
+                .size
+                .saturating_sub(editor.col_offset);
+            if len > 0 {
+                sb.append(&editor.rows[file_row as usize].chars[editor.col_offset as usize..]);
+            } else {
+                sb.append("");
+            }
         }
         sb.append(CLEAR_LINE);
         if y < editor.screen_rows - 1 {
@@ -326,11 +327,31 @@ fn editor_draw_rows(sb: &mut ScreenBuffer, editor: &EditorConfig) {
     }
 }
 
-fn editor_refresh_screen(editor: &EditorConfig, sb: &mut ScreenBuffer) {
+fn scroll_screen(editor: &mut EditorConfig) {
+    if editor.cursor_y < editor.row_offset {
+        editor.row_offset = editor.cursor_y;
+    }
+    if editor.cursor_y >= editor.row_offset + editor.screen_rows {
+        editor.row_offset = editor.cursor_y - editor.screen_rows + 1;
+    }
+    if editor.cursor_x < editor.col_offset {
+        editor.col_offset = editor.cursor_x;
+    }
+    if editor.cursor_x >= editor.col_offset + editor.screen_cols {
+        editor.col_offset = editor.cursor_x - editor.screen_cols + 1;
+    }
+}
+
+fn editor_refresh_screen(editor: &mut EditorConfig, sb: &mut ScreenBuffer) {
+    scroll_screen(editor);
     toggle_cursor(sb, false);
     set_cursor_position(Some(sb), 1, 1);
     editor_draw_rows(sb, editor);
-    set_cursor_position(Some(sb), editor.cursor_y + 1, editor.cursor_x + 1);
+    set_cursor_position(
+        Some(sb),
+        (editor.cursor_y - editor.row_offset) + 1,
+        (editor.cursor_x - editor.col_offset) + 1,
+    );
     toggle_cursor(sb, true);
 
     // flush stdout
@@ -426,6 +447,7 @@ fn init_editor(orig_termios: Termios) -> EditorConfig {
         num_rows: 0,
         rows: Vec::new(),
         row_offset: 0,
+        col_offset: 0,
     }
 }
 
@@ -439,7 +461,7 @@ fn main() {
     }
 
     loop {
-        editor_refresh_screen(&editor, &mut sb);
+        editor_refresh_screen(&mut editor, &mut sb);
         process_keypress(&mut editor);
         sb.flush();
     }
