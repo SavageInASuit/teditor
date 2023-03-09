@@ -1,6 +1,9 @@
+use std::env;
 use std::error::Error;
+use std::fs;
 use std::io;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use termios::*;
 
 const VERSION: &str = "0.0.1";
@@ -10,12 +13,20 @@ const CLEAR_LINE: &str = "\x1b[K";
 const HIDE_CURSOR: &str = "\x1b[?25l";
 const SHOW_CURSOR: &str = "\x1b[?25h";
 
+struct Erow {
+    size: usize,
+    chars: String,
+}
+
 struct EditorConfig {
     orig_termios: Termios,
-    screen_rows: u8,
-    screen_cols: u8,
-    cursor_x: u8,
-    cursor_y: u8,
+    screen_rows: u16,
+    screen_cols: u16,
+    cursor_x: u16,
+    cursor_y: u16,
+    num_rows: u16,
+    rows: Vec<Erow>,
+    row_offset: u16,
 }
 
 #[repr(u32)]
@@ -133,7 +144,7 @@ fn die(e: &str, err: &Option<Box<dyn Error>>) {
 }
 
 // todo refactor this
-fn get_cursor_position() -> (u8, u8) {
+fn get_cursor_position() -> (u16, u16) {
     println!("\x1b[6n");
     let mut buf: [u8; 16] = [0; 16];
     match io::stdin().read(&mut buf) {
@@ -150,22 +161,22 @@ fn get_cursor_position() -> (u8, u8) {
         (0, 0)
     } else {
         // parse the position
-        let mut row: u8 = 0;
-        let mut col: u8 = 0;
+        let mut row: u16 = 0;
+        let mut col: u16 = 0;
         let mut i = 2;
         while i < buf.len() {
             if buf[i] == 59 {
                 i += 1;
                 break;
             }
-            row = row * 10 + (buf[i] - 48);
+            row = row * 10 + (buf[i] as u16 - 48);
             i += 1;
         }
         while i < buf.len() {
             if buf[i] == 82 {
                 break;
             }
-            col = col * 10 + (buf[i] - 48);
+            col = col * 10 + (buf[i] as u16 - 48);
             i += 1;
         }
         (col, row)
@@ -173,12 +184,37 @@ fn get_cursor_position() -> (u8, u8) {
     // get the cursor position buffer
 }
 
-fn get_window_size() -> (u8, u8) {
+fn get_window_size() -> (u16, u16) {
     if let Some(size) = termsize::get() {
-        (size.cols as u8, size.rows as u8)
+        (size.cols, size.rows)
     } else {
         print!("\x1b[999C\x1b[999B");
         get_cursor_position()
+    }
+}
+
+// IO
+fn editor_open(editor: &mut EditorConfig, path: &str) {
+    let path = PathBuf::from(path);
+    let file_result = fs::read_to_string(path);
+    let file_content = match file_result {
+        Ok(content) => content,
+        Err(e) => {
+            die(
+                format!("Error when trying to load file: {}", e).as_str(),
+                &None,
+            );
+            panic!("Shouldn't get here");
+        }
+    };
+    for line in file_content.lines() {
+        let linelen = line.len();
+        let row = Erow {
+            size: linelen,
+            chars: line.to_string(),
+        };
+        editor.rows.push(row);
+        editor.num_rows += 1;
     }
 }
 
@@ -190,7 +226,7 @@ fn toggle_cursor(sb: &mut ScreenBuffer, show: bool) {
     }
 }
 
-fn set_cursor_position(sb: Option<&mut ScreenBuffer>, row: u8, col: u8) {
+fn set_cursor_position(sb: Option<&mut ScreenBuffer>, row: u16, col: u16) {
     match sb {
         Some(sb) => sb.append(format!("\x1b[{};{}H", row, col).as_str()),
         None => print!("\x1b[{};{}H", row, col),
@@ -212,11 +248,15 @@ fn move_cursor(editor: &mut EditorConfig, key: EditorKey) {
         EditorKey::Up => {
             if editor.cursor_y > 0 {
                 editor.cursor_y -= 1;
+            } else if editor.row_offset > 0 {
+                editor.row_offset -= 1;
             }
         }
         EditorKey::Down => {
             if editor.cursor_y < editor.screen_rows - 1 {
                 editor.cursor_y += 1;
+            } else {
+                editor.row_offset += 1;
             }
         }
         EditorKey::PageUp => {
@@ -253,28 +293,34 @@ fn clear_and_reset_cursor(sb: Option<&mut ScreenBuffer>) {
     }
 }
 
-fn editor_draw_rows(sb: &mut ScreenBuffer, cols: u8, rows: u8) {
-    for y in 0..rows {
-        if y == rows / 3 {
-            // TODO: extract this into a function
-            let welcome = format!("Teditor -- version {}", VERSION);
-            if welcome.len() > cols as usize {
-                sb.append(&welcome[..(cols as usize)]);
-            } else {
-                let mut padding = (cols as usize - welcome.len()) / 2;
-                if padding > 0 {
-                    sb.append("~");
-                    padding -= 1;
-                    sb.append(&" ".repeat(padding));
-                }
+fn editor_draw_rows(sb: &mut ScreenBuffer, editor: &EditorConfig) {
+    for y in 0..editor.screen_rows {
+        let file_row = y + editor.row_offset;
+        if file_row >= editor.num_rows {
+            if editor.num_rows == 0 && y == editor.screen_rows / 3 {
+                // TODO: extract this into a function
+                let welcome = format!("Teditor -- version {}", VERSION);
+                if welcome.len() > editor.screen_cols as usize {
+                    sb.append(&welcome[..(editor.screen_cols as usize)]);
+                } else {
+                    let mut padding = ((editor.screen_cols as usize) - welcome.len()) / 2;
+                    if padding > 0 {
+                        sb.append("~");
+                        padding -= 1;
+                        sb.append(&" ".repeat(padding));
+                    }
 
-                sb.append(&welcome);
+                    sb.append(&welcome);
+                }
+            } else {
+                sb.append("~");
             }
         } else {
-            sb.append("~");
+            // Render the contents of this row, instead of the tilde
+            sb.append(&editor.rows[file_row as usize].chars);
         }
         sb.append(CLEAR_LINE);
-        if y < rows - 1 {
+        if y < editor.screen_rows - 1 {
             sb.append("\r\n");
         }
     }
@@ -283,7 +329,7 @@ fn editor_draw_rows(sb: &mut ScreenBuffer, cols: u8, rows: u8) {
 fn editor_refresh_screen(editor: &EditorConfig, sb: &mut ScreenBuffer) {
     toggle_cursor(sb, false);
     set_cursor_position(Some(sb), 1, 1);
-    editor_draw_rows(sb, editor.screen_cols, editor.screen_rows);
+    editor_draw_rows(sb, editor);
     set_cursor_position(Some(sb), editor.cursor_y + 1, editor.cursor_x + 1);
     toggle_cursor(sb, true);
 
@@ -377,6 +423,9 @@ fn init_editor(orig_termios: Termios) -> EditorConfig {
         screen_cols,
         cursor_x: 0,
         cursor_y: 0,
+        num_rows: 0,
+        rows: Vec::new(),
+        row_offset: 0,
     }
 }
 
@@ -384,6 +433,10 @@ fn main() {
     let orig_termios = setup_terminal();
     let mut editor = init_editor(orig_termios);
     let mut sb = ScreenBuffer::new();
+    let args: Vec<String> = env::args().collect();
+    if args.len() >= 2 {
+        editor_open(&mut editor, &args[1]);
+    }
 
     loop {
         editor_refresh_screen(&editor, &mut sb);
